@@ -1,0 +1,142 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - manifest.json
+      - icon-512.png
+      - .github/workflows/build-apk.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Siapkan isi aplikasi
+        run: |
+          mkdir www
+          cp index.html manifest.json www/
+          cp icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png www/
+
+      - name: Pasang Capacitor dan buat proyek Android
+        run: |
+          npm init -y
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npx cap init "CS Gudang" id.cs.gudang --web-dir www
+          npx cap add android
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 29/' android/variables.gradle
+
+      - name: Tambah penyimpan file cadangan (plugin GaleriSimpan)
+        run: |
+          D=android/app/src/main/java/id/cs/gudang
+          mkdir -p $D
+          cat > $D/GaleriSimpan.java <<'EOF'
+          package id.cs.gudang;
+
+          import android.content.ContentValues;
+          import android.content.Context;
+          import android.net.Uri;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import java.io.OutputStream;
+
+          @CapacitorPlugin(name = "GaleriSimpan")
+          public class GaleriSimpan extends Plugin {
+            @PluginMethod
+            public void simpan(PluginCall call) {
+              String nama = call.getString("nama");
+              String data = call.getString("data");
+              String mime = call.getString("mime", "application/octet-stream");
+              if (nama == null || data == null) {
+                call.reject("Data kosong");
+                return;
+              }
+              try {
+                byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+                Context ctx = getContext();
+                boolean gambar = mime.startsWith("image/");
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.MediaColumns.DISPLAY_NAME, nama);
+                v.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+                v.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                    (gambar ? Environment.DIRECTORY_PICTURES : Environment.DIRECTORY_DOWNLOADS) + "/CS Gudang");
+                Uri tabel = gambar ? MediaStore.Images.Media.EXTERNAL_CONTENT_URI : MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+                Uri uri = ctx.getContentResolver().insert(tabel, v);
+                if (uri == null) throw new Exception("Tidak bisa membuat file");
+                try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
+                  os.write(bytes);
+                }
+                JSObject r = new JSObject();
+                r.put("ok", true);
+                call.resolve(r);
+              } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+              }
+            }
+          }
+          EOF
+          cat > $D/MainActivity.java <<'EOF'
+          package id.cs.gudang;
+
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(GaleriSimpan.class);
+              super.onCreate(savedInstanceState);
+            }
+          }
+          EOF
+
+      - name: Pasang ikon CS
+        run: |
+          R=android/app/src/main/res
+          rm -rf $R/mipmap-anydpi-v26
+          for p in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            d=${p%%:*}; s=${p##*:}
+            mkdir -p $R/mipmap-$d
+            convert icon-512.png -resize ${s}x${s} $R/mipmap-$d/ic_launcher.png
+            cp $R/mipmap-$d/ic_launcher.png $R/mipmap-$d/ic_launcher_round.png
+            cp $R/mipmap-$d/ic_launcher.png $R/mipmap-$d/ic_launcher_foreground.png
+          done
+
+      - name: Kunci tanda tangan tetap
+        run: |
+          mkdir -p ~/.android
+          echo "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" | base64 -d > ~/.android/debug.keystore
+
+      - name: Bangun APK
+        run: |
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CS-Gudang-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
