@@ -119,7 +119,7 @@ jobs:
           for p in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
             d=${p%%:*}; s=${p##*:}
             mkdir -p $R/mipmap-$d
-            convert icon-512.png -resize ${s}x${s} $R/mipmap-$d/ic_launcher.png
+            magick icon-512.png -resize ${s}x${s} $R/mipmap-$d/ic_launcher.png
             cp $R/mipmap-$d/ic_launcher.png $R/mipmap-$d/ic_launcher_round.png
             cp $R/mipmap-$d/ic_launcher.png $R/mipmap-$d/ic_launcher_foreground.png
           done
